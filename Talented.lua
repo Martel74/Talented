@@ -151,6 +151,13 @@ local function Talented_CreateButton(index)
 end
 
 local function Talented_UpdateButtons()
+	if not frame then
+		-- Spec-related events can fire before PLAYER_LOGIN during the login
+		-- sequence, ahead of Talented_Initialize() creating the frame; skip this
+		-- call since Talented_Initialize() runs its own update once ready.
+		return
+	end
+
 	local numSpecs = Talented_GetNumSpecs() or 0
 	local currentSpec = Talented_GetActiveSpec()
 	local size = Talented_GetIconSize()
@@ -193,6 +200,9 @@ local function Talented_ApplyIconSize()
 end
 
 local function Talented_SetButtonsEnabled(enabled)
+	if not frame then
+		return
+	end
 	for i = 1, MAX_SPECS do
 		local button = buttons[i]
 		button.icon:SetDesaturated(not enabled)
