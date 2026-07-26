@@ -2,7 +2,7 @@
 ## Title: Talented
 ## Notes: A small floating box for switching specializations at a glance, with the current one highlighted.
 ## Author: Martel74
-## Version: 1.0.0
+## Version: 1.0.1
 ## IconTexture: Interface\Icons\INV_Misc_Book_09
 ## X-Category: Class
 ## X-License: MIT
