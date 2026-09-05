@@ -14,6 +14,7 @@ local frame
 local buttons = {}
 local lockButton
 local sizeDropdown
+local pendingConfigActivation -- {specIndex = ..., configID = ...} while waiting on a spec switch before applying a loadout
 
 local function Talented_GetIconSize()
 	for _, opt in ipairs(ICON_SIZES) do
@@ -70,6 +71,65 @@ local function Talented_SetSpec(index)
 	return SetSpecialization(index)
 end
 
+-- Talent loadouts ("configs") are a separate system from specs (C_ClassTalents/C_Traits,
+-- added in the Dragonflight talent tree rework) and every call here is optional: older
+-- clients or an unexpected API shape should just mean no loadout menu, not an error.
+local function Talented_GetSpecLoadouts(specID)
+	if not (specID and C_ClassTalents and C_ClassTalents.GetConfigIDsBySpecID and C_Traits and C_Traits.GetConfigInfo) then
+		return nil
+	end
+	local ok, configIDs = pcall(C_ClassTalents.GetConfigIDsBySpecID, specID)
+	if not ok or not configIDs or #configIDs == 0 then
+		return nil
+	end
+	local loadouts = {}
+	for _, configID in ipairs(configIDs) do
+		local infoOk, info = pcall(C_Traits.GetConfigInfo, configID)
+		if infoOk and info and info.name then
+			loadouts[#loadouts + 1] = { configID = configID, name = info.name }
+		end
+	end
+	return #loadouts > 0 and loadouts or nil
+end
+
+local function Talented_GetActiveConfigID(specID, isCurrentSpec)
+	if isCurrentSpec and C_ClassTalents and C_ClassTalents.GetActiveConfigID then
+		local ok, configID = pcall(C_ClassTalents.GetActiveConfigID)
+		if ok then
+			return configID
+		end
+	end
+	if C_ClassTalents and C_ClassTalents.GetLastSelectedSavedConfigID then
+		local ok, configID = pcall(C_ClassTalents.GetLastSelectedSavedConfigID, specID)
+		if ok then
+			return configID
+		end
+	end
+	return nil
+end
+
+local function Talented_ActivateConfig(configID)
+	if C_ClassTalents and C_ClassTalents.ActivateConfig then
+		pcall(C_ClassTalents.ActivateConfig, configID)
+	end
+end
+
+local function Talented_JumpToLoadout(specIndex, configID)
+	if InCombatLockdown() then
+		UIErrorsFrame:AddMessage(SPELL_FAILED_AFFECTING_COMBAT or "Can't change specialization in combat.", 1.0, 0.1, 0.1, 1.0)
+		return
+	end
+	if specIndex == Talented_GetActiveSpec() then
+		Talented_ActivateConfig(configID)
+	else
+		-- Configs only activate for the currently active spec, so switch first and let
+		-- the PLAYER_SPECIALIZATION_CHANGED/ACTIVE_TALENT_GROUP_CHANGED handler finish
+		-- the job once the server confirms the new spec.
+		pendingConfigActivation = { specIndex = specIndex, configID = configID }
+		Talented_SetSpec(specIndex)
+	end
+end
+
 local function Talented_GetDefaultDB()
 	return {
 		point = "CENTER",
@@ -106,6 +166,9 @@ local function Talented_Button_OnEnter(self)
 	if self.specIndex == Talented_GetActiveSpec() then
 		GameTooltip:AddLine(CURRENT or "Current specialization", 0.1, 1, 0.1)
 	end
+	if Talented_GetSpecLoadouts(self.specID) then
+		GameTooltip:AddLine("Right-click to jump to a saved loadout", 0.7, 0.7, 0.7)
+	end
 	GameTooltip:Show()
 end
 
@@ -113,7 +176,30 @@ local function Talented_Button_OnLeave()
 	GameTooltip:Hide()
 end
 
-local function Talented_Button_OnClick(self)
+local function Talented_Button_ShowLoadoutMenu(self)
+	local loadouts = Talented_GetSpecLoadouts(self.specID)
+	if not loadouts or not (MenuUtil and MenuUtil.CreateContextMenu) then
+		return
+	end
+	local isCurrentSpec = self.specIndex == Talented_GetActiveSpec()
+	local activeConfigID = Talented_GetActiveConfigID(self.specID, isCurrentSpec)
+	local specIndex, specName = self.specIndex, self.specName
+	MenuUtil.CreateContextMenu(self, function(owner, rootDescription)
+		rootDescription:CreateTitle(specName)
+		for _, loadout in ipairs(loadouts) do
+			rootDescription:CreateRadio(loadout.name,
+				function(configID) return configID == activeConfigID end,
+				function(configID) Talented_JumpToLoadout(specIndex, configID) end,
+				loadout.configID)
+		end
+	end)
+end
+
+local function Talented_Button_OnClick(self, mouseButton)
+	if mouseButton == "RightButton" then
+		Talented_Button_ShowLoadoutMenu(self)
+		return
+	end
 	if InCombatLockdown() then
 		UIErrorsFrame:AddMessage(SPELL_FAILED_AFFECTING_COMBAT or "Can't change specialization in combat.", 1.0, 0.1, 0.1, 1.0)
 		return
@@ -143,6 +229,7 @@ local function Talented_CreateButton(index)
 	highlight:SetTexture("Interface\\Buttons\\ButtonHilight-Square")
 	highlight:SetBlendMode("ADD")
 
+	button:RegisterForClicks("LeftButtonUp", "RightButtonUp")
 	button:SetScript("OnEnter", Talented_Button_OnEnter)
 	button:SetScript("OnLeave", Talented_Button_OnLeave)
 	button:SetScript("OnClick", Talented_Button_OnClick)
@@ -170,6 +257,7 @@ local function Talented_UpdateButtons()
 			local specID, name, description, icon, role = Talented_GetSpecInfo(i)
 			button.icon:SetTexture(icon)
 			button.specIndex = i
+			button.specID = specID
 			button.specName = name
 			button.specRole = role
 			button:ClearAllPoints()
@@ -322,14 +410,20 @@ eventFrame:RegisterEvent("PLAYER_SPECIALIZATION_CHANGED")
 eventFrame:RegisterEvent("ACTIVE_TALENT_GROUP_CHANGED")
 eventFrame:RegisterEvent("PLAYER_REGEN_DISABLED")
 eventFrame:RegisterEvent("PLAYER_REGEN_ENABLED")
-eventFrame:SetScript("OnEvent", function(self, event)
+eventFrame:SetScript("OnEvent", function(self, event, unit)
 	if event == "PLAYER_LOGIN" then
 		Talented_DB = Talented_DB or {}
 		Talented_Initialize()
+	elseif event == "PLAYER_SPECIALIZATION_CHANGED" and unit ~= "player" then
+		-- also fires for party/raid members when their spec changes; ignore those
 	elseif event == "PLAYER_ENTERING_WORLD" or event == "PLAYER_SPECIALIZATION_CHANGED" or event == "ACTIVE_TALENT_GROUP_CHANGED" then
 		-- PLAYER_ENTERING_WORLD fires on every login/reload/zone after spec data
 		-- is guaranteed to be synced, unlike PLAYER_LOGIN which can beat the server to it
 		Talented_UpdateButtons()
+		if pendingConfigActivation and pendingConfigActivation.specIndex == Talented_GetActiveSpec() then
+			Talented_ActivateConfig(pendingConfigActivation.configID)
+			pendingConfigActivation = nil
+		end
 	elseif event == "PLAYER_REGEN_DISABLED" then
 		Talented_SetButtonsEnabled(false)
 	elseif event == "PLAYER_REGEN_ENABLED" then
@@ -369,6 +463,19 @@ SlashCmdList.TALENTED = function(msg)
 		print(string.format("|cff33ff99Talented|r: numSpecs=%d currentSpec=%s frame shown=%s point=%s,%s,%.0f,%.0f",
 			numSpecs, tostring(currentSpec), tostring(frame and frame:IsShown()),
 			tostring(Talented_DB.point), tostring(Talented_DB.relPoint), Talented_DB.x or 0, Talented_DB.y or 0))
+		for i = 1, numSpecs do
+			local specID = select(1, Talented_GetSpecInfo(i))
+			local loadouts = Talented_GetSpecLoadouts(specID)
+			if loadouts then
+				local names = {}
+				for _, loadout in ipairs(loadouts) do
+					names[#names + 1] = loadout.name
+				end
+				print(string.format("  spec %d (specID=%s): %d loadout(s): %s", i, tostring(specID), #loadouts, table.concat(names, ", ")))
+			else
+				print(string.format("  spec %d (specID=%s): no loadouts found", i, tostring(specID)))
+			end
+		end
 	else
 		print("|cff33ff99Talented|r commands: /talented lock, /talented unlock, /talented reset, /talented size small|medium|large, /talented debug")
 	end
