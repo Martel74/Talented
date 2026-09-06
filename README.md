@@ -4,7 +4,8 @@ A small floating box for switching specializations at a glance. One button per
 available spec, icon pulled straight from the game's own specialization data,
 with the current spec marked by the same marching-ants ring the pet action bar
 uses for an active ability. Click a button to switch specs instantly (blocked
-in combat, same as the built-in specialization UI).
+in combat, same as the built-in specialization UI). Right-click a spec to jump
+straight to one of its saved talent loadouts.
 
 **Download:** grab the latest packaged zip from the [Releases page](https://github.com/Martel74/Talented/releases/latest) and extract it into your `Interface/Addons` folder.
 
@@ -12,6 +13,8 @@ in combat, same as the built-in specialization UI).
 
 - One button per specialization (2-4 depending on class), auto-sized to fit.
 - Current spec highlighted with an animated glow, updates live on spec change.
+- Right-click a spec button to list its saved talent loadouts and jump straight
+  to one - switches spec first if needed, then applies that loadout.
 - Draggable frame with a lock/unlock toggle in the corner.
 - Icon size options (Small/Medium/Large) in Options > AddOns > Talented.
 
